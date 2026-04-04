@@ -53,8 +53,13 @@ data:
     valid: 0.10
     test: 0.05
 
-  max_sentence_length: 512  # full length preserved
+  max_sentence_length: 512
   min_sentence_length: 5
+
+  # Sources to exclude from training (too noisy — DER > 0.25 in previous run)
+  excluded_genres:
+    - "al-kalema.org"
+    - "enfal.de"
 
 # ---- Normalization (identical) ----
 normalization:
@@ -83,38 +88,38 @@ model:
   architecture: "bilstm_crf"
 
   char_embedding:
-    dim: 128        # same
-    dropout: 0.1    # same
+    dim: 128
+    dropout: 0.15    # ↑ slightly to fight overfitting
 
   encoder:
-    type: "bilstm"  # same
-    hidden_dim: 256  # same
-    num_layers: 3    # same
-    dropout: 0.3     # same
+    type: "bilstm"
+    hidden_dim: 256
+    num_layers: 3
+    dropout: 0.5     # ↑ from 0.3 — was overfitting (val DER 0.048 vs test 0.130)
     num_heads: 8
     ff_dim: 1024
 
   use_crf: true  # ✓ NON-NEGOTIABLE — preserved
 
   word_ending_head:
-    enable: true         # ✓ NON-NEGOTIABLE — preserved
-    hidden_dim: 128      # same
-    context_window: 5    # same
-    loss_weight: 0.3     # same
+    enable: true
+    hidden_dim: 128
+    context_window: 5
+    loss_weight: 1.0     # ↑ from 0.3 — head was never trained before, needs stronger signal
 
 # ---- Training (GPU-optimized) ----
 training:
-  epochs: 50                     # same
-  batch_size: 128                # ↑ from 64 — RTX 4090 has 24GB VRAM
-  learning_rate: 0.001           # same
-  weight_decay: 0.0001           # same
-  scheduler: "cosine"            # same
-  warmup_steps: 1000             # same
-  gradient_clip: 5.0             # same — critical for CRF stability
-  early_stopping_patience: 7     # same
+  epochs: 80                     # ↑ from 50 — head now actually trains, needs more epochs
+  batch_size: 128                # RTX 4090 24GB VRAM
+  learning_rate: 0.001
+  weight_decay: 0.001            # ↑ from 0.0001 — stronger L2 regularization vs overfitting
+  scheduler: "cosine"
+  warmup_steps: 1000             # NOW IMPLEMENTED — linear warmup then cosine decay
+  gradient_clip: 5.0             # critical for CRF stability
+  early_stopping_patience: 10   # ↑ from 7 — give head time to converge
   checkpoint_dir: "checkpoints"
   log_dir: "logs"
-  num_workers: 8                 # ↑ from 4 — feed GPU faster
+  num_workers: 8
 
   # Mixed precision — SAFE with our CRF (forced float32 internally)
   fp16: true

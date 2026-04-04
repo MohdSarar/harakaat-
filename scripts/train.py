@@ -61,11 +61,17 @@ def main():
     splits_dir = Path(dc.get("splits_dir", "data/splits"))
     max_len = dc.get("max_sentence_length", 512)
 
+    excluded_genres = dc.get("excluded_genres", [])
+    if excluded_genres:
+        print(f"Excluding genres from training: {excluded_genres}")
+
     train_dataset = DiacritizationDataset(
-        splits_dir / "train" / "data.jsonl", vocab, max_length=max_len
+        splits_dir / "train" / "data.jsonl", vocab,
+        max_length=max_len, excluded_genres=excluded_genres,
     )
     valid_dataset = DiacritizationDataset(
-        splits_dir / "valid" / "data.jsonl", vocab, max_length=max_len
+        splits_dir / "valid" / "data.jsonl", vocab,
+        max_length=max_len, excluded_genres=excluded_genres,
     )
     print(f"Train: {len(train_dataset)} | Valid: {len(valid_dataset)}")
 

@@ -110,16 +110,16 @@ class WordEndingHead(nn.Module):
         """
         batch_size, seq_len, hidden_dim = hidden_states.shape
         ctx = self.context_window
-        
-        # Pad left with zeros so position i can look back ctx positions
-        pad = hidden_states.new_zeros(batch_size, ctx, hidden_dim)
-        padded = torch.cat([pad, hidden_states], dim=1)  # (batch, ctx + seq_len, hidden)
-        
-        # Use unfold to extract all windows in one vectorized op (GPU-fast)
-        # (batch, ctx + seq_len, hidden) → transpose → unfold → reshape
-        # unfold operates on the sequence dimension
-        windows = padded.unfold(1, ctx, 1)  # (batch, seq_len, hidden, ctx)
-        windows = windows.permute(0, 1, 3, 2)  # (batch, seq_len, ctx, hidden)
+
+        # Pad left with ctx-1 zeros so unfold produces exactly seq_len windows.
+        # unfold(dim, size, step) gives (L - size)/step + 1 windows.
+        # With L = (ctx-1) + seq_len and size = ctx: (ctx-1+seq_len-ctx)/1+1 = seq_len ✓
+        pad = hidden_states.new_zeros(batch_size, ctx - 1, hidden_dim)
+        padded = torch.cat([pad, hidden_states], dim=1)  # (batch, ctx-1+seq_len, hidden)
+
+        # Vectorized window extraction
+        windows = padded.unfold(1, ctx, 1)          # (batch, seq_len, hidden_dim, ctx)
+        windows = windows.permute(0, 1, 3, 2)        # (batch, seq_len, ctx, hidden_dim)
         windows = windows.reshape(batch_size, seq_len, ctx * hidden_dim)
         
         logits = self.fc(windows)  # (batch, seq_len, num_classes)
@@ -219,12 +219,16 @@ class DiacritizationModel(nn.Module):
         emissions = self.classifier(hidden)  # (batch, seq, num_classes)
         
         result = {"emissions": emissions}
-        
+
+        # Word-ending head — always compute when mask is available (training AND inference)
+        if self.use_word_ending_head and word_end_mask is not None:
+            we_logits = self.word_ending_head(hidden, word_end_mask)
+            result["word_ending_logits"] = we_logits
+
         # Compute loss
         if labels is not None:
             if self.use_crf:
-                # CRF loss
-                # Replace -1 padding in labels with 0 for CRF
+                # CRF loss — replace -1 padding with 0
                 crf_labels = labels.clone()
                 crf_labels[crf_labels == -1] = 0
                 main_loss = self.crf(emissions, crf_labels, attention_mask)
@@ -234,25 +238,21 @@ class DiacritizationModel(nn.Module):
                     labels.view(-1),
                     ignore_index=-1,
                 )
-            
+
             total_loss = main_loss
-            
-            # Word-ending head loss
-            if self.use_word_ending_head and word_end_mask is not None:
-                we_logits = self.word_ending_head(hidden, word_end_mask)
-                result["word_ending_logits"] = we_logits
-                
-                # Only compute loss at word-end positions
+
+            # Word-ending head loss (only at word-final positions)
+            if "word_ending_logits" in result:
                 we_mask = word_end_mask & attention_mask
                 if we_mask.any():
                     we_loss = nn.functional.cross_entropy(
-                        we_logits[we_mask],
+                        result["word_ending_logits"][we_mask],
                         labels[we_mask],
                         ignore_index=-1,
                     )
                     total_loss = total_loss + self.we_loss_weight * we_loss
                     result["word_ending_loss"] = we_loss
-            
+
             result["loss"] = total_loss
         
         # Decode predictions

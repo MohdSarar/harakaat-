@@ -30,6 +30,8 @@ def main():
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--output", type=str, default="evaluation_report.json")
     parser.add_argument("--split", type=str, default="test")
+    parser.add_argument("--no-reranking", action="store_true",
+                        help="Disable WordEndingHead reranking (use for checkpoints trained before the head fix)")
     args = parser.parse_args()
 
     config = Config.from_yaml(args.config)
@@ -50,14 +52,19 @@ def main():
     )
     print(f"Test samples: {len(test_dataset)}")
 
-    # Load model
+    # Load checkpoint first to infer vocab size actually used during training
+    checkpoint = torch.load(args.checkpoint, map_location=device)
+    ckpt_vocab_size = checkpoint["model_state_dict"]["char_embed.embedding.weight"].shape[0]
+    if ckpt_vocab_size != len(vocab):
+        print(f"Warning: checkpoint vocab size ({ckpt_vocab_size}) differs from current vocab ({len(vocab)}). Using checkpoint size.")
+
     mc = config_dict.get("model", {})
     enc = mc.get("encoder", {})
     emb = mc.get("char_embedding", {})
     weh = mc.get("word_ending_head", {})
 
     model = DiacritizationModel(
-        vocab_size=len(vocab),
+        vocab_size=ckpt_vocab_size,
         embed_dim=emb.get("dim", 128),
         encoder_type=enc.get("type", "bilstm"),
         hidden_dim=enc.get("hidden_dim", 256),
@@ -65,7 +72,6 @@ def main():
         use_crf=mc.get("use_crf", True),
         use_word_ending_head=weh.get("enable", True),
     )
-    checkpoint = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
     model.eval()
@@ -75,12 +81,16 @@ def main():
     lex_path = Path(dc.get("lexicons_dir", "data/lexicons")) / "frequency_lexicon.json"
     lexicon = FrequencyLexicon.load(lex_path) if lex_path.exists() else None
     dconf = config_dict.get("decoding", {})
+    use_reranking = dconf.get("use_reranking", True) and not args.no_reranking
     decoder = HybridDecoder(
         lexicon=lexicon,
         use_morphological_constraints=dconf.get("use_morphological_constraints", True),
         use_lexicon=dconf.get("use_lexicon", True),
-        use_reranking=dconf.get("use_reranking", True),
+        use_reranking=use_reranking,
+        word_ending_override_threshold=dconf.get("word_ending_override_threshold", 0.40),
     )
+    if args.no_reranking:
+        print("WordEndingHead reranking disabled (--no-reranking)")
 
     # Load raw test records for metadata (genre, variety)
     raw_records = []
@@ -94,12 +104,23 @@ def main():
     references = []
     idx = 0
 
+    unk_idx = vocab.unk_idx
+
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Evaluating"):
             batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
+            # Clamp indices that exceed training vocab size to UNK
+            if "input_ids" in batch:
+                ids = batch["input_ids"]
+                out_of_range = ids >= ckpt_vocab_size
+                if out_of_range.any():
+                    ids = ids.clone()
+                    ids[out_of_range] = min(unk_idx, ckpt_vocab_size - 1)
+                    batch["input_ids"] = ids
             output = model(
                 input_ids=batch["input_ids"],
                 attention_mask=batch["attention_mask"],
+                word_end_mask=batch.get("word_end_mask"),
                 lengths=batch.get("lengths"),
             )
             

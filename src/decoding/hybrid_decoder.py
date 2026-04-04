@@ -60,12 +60,14 @@ class HybridDecoder:
         use_lexicon: bool = True,
         use_reranking: bool = True,
         confidence_threshold: float = 0.85,
+        word_ending_override_threshold: float = 0.40,
     ):
         self.lexicon = lexicon
         self.use_morph = use_morphological_constraints
         self.use_lex = use_lexicon and lexicon is not None
         self.use_reranking = use_reranking
         self.confidence_threshold = confidence_threshold
+        self.word_ending_override_threshold = word_ending_override_threshold
 
     def decode(
         self,
@@ -161,8 +163,8 @@ class HybridDecoder:
             we_pred = we_probs.argmax().item()
             we_conf = we_probs[we_pred].item()
             
-            # Only override if word-ending head is more confident
-            if we_conf > 0.6 and we_pred != labels[pos]:
+            # Only override if word-ending head is sufficiently confident
+            if we_conf > self.word_ending_override_threshold and we_pred != labels[pos]:
                 labels[pos] = we_pred
                 corrections += 1
         

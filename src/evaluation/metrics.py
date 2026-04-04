@@ -93,32 +93,32 @@ def compute_wer(
 def compute_der_case_endings(
     text_pred_diac: str,
     text_ref_diac: str,
-) -> tuple[float, float]:
+) -> tuple[int, int, int, int]:
     """
-    Compute DER separately for:
+    Compute raw error/total counts separately for:
     1. Case endings (word-final diacritics)
     2. Non-case-ending diacritics
-    
-    Returns (der_case_endings, der_without_case_endings)
+
+    Returns (case_errors, case_total, nocase_errors, nocase_total)
     """
     pred_undiac = strip_diacritics(text_pred_diac)
     ref_undiac = strip_diacritics(text_ref_diac)
-    
+
     if pred_undiac != ref_undiac:
         raise ValueError("Undiacritized texts must match for DER computation")
-    
+
     pred_diacs = extract_diacritics(text_pred_diac)
     ref_diacs = extract_diacritics(text_ref_diac)
-    
+
     wb = set(word_boundaries(pred_undiac))
-    
+
     case_total = case_errors = 0
     non_case_total = non_case_errors = 0
-    
+
     for i, (pd, rd) in enumerate(zip(pred_diacs, ref_diacs)):
         pd_norm = normalize_diac_sequence(pd)
         rd_norm = normalize_diac_sequence(rd)
-        
+
         if i in wb:
             case_total += 1
             if pd_norm != rd_norm:
@@ -127,11 +127,8 @@ def compute_der_case_endings(
             non_case_total += 1
             if pd_norm != rd_norm:
                 non_case_errors += 1
-    
-    der_case = case_errors / max(case_total, 1)
-    der_no_case = non_case_errors / max(non_case_total, 1)
-    
-    return der_case, der_no_case
+
+    return case_errors, case_total, non_case_errors, non_case_total
 
 
 @dataclass
@@ -254,34 +251,35 @@ def run_full_evaluation(
         pred_diac = pred["text_diac"]
         ref_diac = ref["text_diac"]
         text_undiac = ref.get("text_undiac", strip_diacritics(ref_diac))
-        
+
         report.total_chars += len(text_undiac)
         report.total_words += len(text_undiac.split())
-        
+
         # Extract labels
         pred_d = extract_diacritics(pred_diac)
         ref_d = extract_diacritics(ref_diac)
-        
+
         pred_labels = [DIAC_LABEL_TO_IDX.get(normalize_diac_sequence(d), 0) for d in pred_d]
         ref_labels = [DIAC_LABEL_TO_IDX.get(normalize_diac_sequence(d), 0) for d in ref_d]
-        
+
         # Align lengths
         min_len = min(len(pred_labels), len(ref_labels))
         pred_labels = pred_labels[:min_len]
         ref_labels = ref_labels[:min_len]
-        
+
         all_preds_labels.append(pred_labels)
         all_refs_labels.append(ref_labels)
-        
-        # Case ending analysis
+
+        # Case ending analysis — accumulate raw counts
         try:
-            der_ce, der_noce = compute_der_case_endings(pred_diac, ref_diac)
-            wb = word_boundaries(text_undiac)
-            case_total_count += len(wb)
-            nocase_total_count += min_len - len(wb)
+            ce_err, ce_tot, nce_err, nce_tot = compute_der_case_endings(pred_diac, ref_diac)
+            case_total_err += ce_err
+            case_total_count += ce_tot
+            nocase_total_err += nce_err
+            nocase_total_count += nce_tot
         except ValueError:
             pass
-        
+
         # Genre / variety breakdown
         genre = ref.get("genre", "unknown")
         variety = ref.get("variety", "unknown")
@@ -289,7 +287,7 @@ def run_full_evaluation(
         genre_data[genre]["refs"].append(ref_labels)
         variety_data[variety]["preds"].append(pred_labels)
         variety_data[variety]["refs"].append(ref_labels)
-        
+
         # Length bucket
         wc = len(text_undiac.split())
         if wc <= 10:
@@ -300,11 +298,18 @@ def run_full_evaluation(
             bucket = "long (>30)"
         length_data[bucket]["preds"].append(pred_labels)
         length_data[bucket]["refs"].append(ref_labels)
-        
-        # OOV analysis
+
+        # OOV analysis — map each word to its own label slice
         if vocab_words is not None:
+            char_offset = 0
             for word in text_undiac.split():
-                for p, r in zip(pred_labels, ref_labels):
+                # Skip spaces in char-level alignment
+                while char_offset < len(text_undiac) and text_undiac[char_offset] == " ":
+                    char_offset += 1
+                word_len = len(word)
+                word_pred = pred_labels[char_offset:char_offset + word_len]
+                word_ref = ref_labels[char_offset:char_offset + word_len]
+                for p, r in zip(word_pred, word_ref):
                     if word in vocab_words:
                         iv_total += 1
                         if p != r:
@@ -313,10 +318,13 @@ def run_full_evaluation(
                         oov_total += 1
                         if p != r:
                             oov_errors += 1
+                char_offset += word_len
     
     # Compute overall metrics
     report.overall_der = compute_der(all_preds_labels, all_refs_labels)
     report.overall_wer = compute_wer(all_preds_labels, all_refs_labels)
+    report.der_case_endings = case_total_err / max(case_total_count, 1)
+    report.der_without_case_endings = nocase_total_err / max(nocase_total_count, 1)
     report.oov_der = oov_errors / max(oov_total, 1)
     report.in_vocab_der = iv_errors / max(iv_total, 1)
     

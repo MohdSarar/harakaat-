@@ -35,19 +35,28 @@ class DiacritizationDataset(Dataset):
         vocab: CharVocab,
         max_length: int = 512,
         text_diac_field: str = "text_diac",
+        excluded_genres: list[str] | None = None,
     ):
         self.vocab = vocab
         self.max_length = max_length
         self.samples: list[dict] = []
+        excluded = set(excluded_genres or [])
 
         data_path = Path(data_path)
+        n_skipped = 0
         with open(data_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
                     record = json.loads(line)
-                    if text_diac_field in record:
-                        self.samples.append(record)
+                    if text_diac_field not in record:
+                        continue
+                    if excluded and record.get("genre", "") in excluded:
+                        n_skipped += 1
+                        continue
+                    self.samples.append(record)
+        if n_skipped:
+            print(f"  Skipped {n_skipped} samples from excluded genres: {sorted(excluded)}")
 
     def __len__(self) -> int:
         return len(self.samples)

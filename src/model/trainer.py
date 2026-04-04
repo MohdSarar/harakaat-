@@ -72,13 +72,27 @@ class Trainer:
 
         # Scheduler
         sched_type = tc.get("scheduler", "cosine")
-        warmup = tc.get("warmup_steps", 1000)
+        warmup = tc.get("warmup_steps", 0)
         total_steps = self.epochs * len(train_loader)
 
         if sched_type == "cosine":
-            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                self.optimizer, T_max=max(total_steps - warmup, 1)
+            cosine_steps = max(total_steps - warmup, 1)
+            cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer, T_max=cosine_steps
             )
+            if warmup > 0:
+                warmup_sched = torch.optim.lr_scheduler.LinearLR(
+                    self.optimizer, start_factor=1e-3, end_factor=1.0, total_iters=warmup
+                )
+                self.scheduler = torch.optim.lr_scheduler.SequentialLR(
+                    self.optimizer,
+                    schedulers=[warmup_sched, cosine_sched],
+                    milestones=[warmup],
+                )
+                print(f"Scheduler: linear warmup ({warmup} steps) → cosine decay ({cosine_steps} steps)")
+            else:
+                self.scheduler = cosine_sched
+                print(f"Scheduler: cosine decay ({cosine_steps} steps)")
         elif sched_type == "plateau":
             self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer, mode="min", factor=0.5, patience=3

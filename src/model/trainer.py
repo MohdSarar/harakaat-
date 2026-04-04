@@ -59,7 +59,7 @@ class Trainer:
         # ---- GPU diagnostics ----
         if device.type == "cuda":
             gpu_name = torch.cuda.get_device_name(device)
-            gpu_mem = torch.cuda.get_device_properties(device).total_mem / (1024**3)
+            gpu_mem = torch.cuda.get_device_properties(device).total_memory / (1024**3)
             print(f"GPU: {gpu_name} ({gpu_mem:.1f} GB)")
             print(f"CUDA: {torch.version.cuda} | cuDNN: {torch.backends.cudnn.version()}")
             print(f"Mixed precision (fp16): {'ON' if self.use_fp16 else 'OFF'}")

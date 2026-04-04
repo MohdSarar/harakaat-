@@ -1,0 +1,46 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Data (too large for git)
+data/raw/
+data/normalized/
+data/aligned/
+data/splits/
+data/metadata/*.duckdb
+data/lexicons/*.json
+!data/lexicons/.gitkeep
+
+# Checkpoints
+checkpoints/
+checkpoints_transformer/
+
+# Logs
+logs/
+logs_transformer/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Environment
+.env
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Evaluation outputs
+evaluation_report.json

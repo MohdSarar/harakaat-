@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "arabic-diacritization-pipeline"
+version = "0.1.0"
+description = "Production-grade Arabic diacritization pipeline"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "pyarrow>=14.0.0",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.5.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.66.0",
+    "requests>=2.31.0",
+    "datasets>=2.15.0",
+    "tokenizers>=0.15.0",
+    "rich>=13.7.0",
+    "click>=8.1.0",
+    "duckdb>=0.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+    "jupyter>=1.0.0",
+    "ipywidgets>=8.1.0",
+    "matplotlib>=3.8.0",
+]
+sinatools = [
+    "sinatools>=0.1.0",
+]
+all = [
+    "arabic-diacritization-pipeline[dev,sinatools]",
+]
+
+[project.scripts]
+diac-train = "scripts.train:main"
+diac-eval = "scripts.evaluate:main"
+diac-serve = "scripts.serve:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "scripts*", "configs*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

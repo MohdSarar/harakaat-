@@ -1,0 +1,102 @@
+# Transformer variant configuration
+# Inherits most settings from default.yaml — only overrides model section
+
+project:
+  name: "arabic-diacritization-transformer"
+  seed: 42
+  device: "auto"
+
+data:
+  raw_dir: "data/raw"
+  normalized_dir: "data/normalized"
+  aligned_dir: "data/aligned"
+  splits_dir: "data/splits"
+  metadata_dir: "data/metadata"
+  lexicons_dir: "data/lexicons"
+  sources: []  # use same data as default
+  split_ratios:
+    train: 0.85
+    valid: 0.10
+    test: 0.05
+  max_sentence_length: 512
+  min_sentence_length: 5
+
+normalization:
+  remove_tatweel: true
+  normalize_alif: true
+  normalize_hamza: true
+  normalize_taa_marbuta: false
+  normalize_punctuation: true
+  strip_extra_whitespace: true
+  preserve_rare_marks: false
+
+linguistic:
+  enable: true
+  use_sinatools: false
+  features: ["pos", "lemma", "morphology"]
+  lexicon:
+    min_frequency: 3
+    max_entries: 500000
+
+model:
+  architecture: "transformer_crf"
+  
+  char_embedding:
+    dim: 256
+    dropout: 0.1
+  
+  encoder:
+    type: "transformer"
+    hidden_dim: 256
+    num_layers: 6
+    dropout: 0.2
+    num_heads: 8
+    ff_dim: 1024
+  
+  use_crf: true
+  
+  word_ending_head:
+    enable: true
+    hidden_dim: 128
+    context_window: 5
+    loss_weight: 0.3
+
+training:
+  epochs: 40
+  batch_size: 32  # smaller for transformer
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  scheduler: "cosine"
+  warmup_steps: 2000
+  gradient_clip: 1.0
+  early_stopping_patience: 10
+  checkpoint_dir: "checkpoints_transformer"
+  log_dir: "logs_transformer"
+  fp16: true
+  augmentation:
+    enable: true
+    random_diac_drop: 0.15
+
+decoding:
+  use_lexicon: true
+  lexicon_path: "data/lexicons/frequency_lexicon.json"
+  use_morphological_constraints: true
+  use_reranking: true
+  beam_size: 5
+  confidence_threshold: 0.85
+
+hitl:
+  enable: true
+  database: "data/metadata/hitl.db"
+  confidence_threshold: 0.7
+
+evaluation:
+  metrics: ["der", "wer", "der_no_case", "der_case_only"]
+  breakdown_by: ["genre", "variety", "sentence_length"]
+  oov_analysis: true
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  max_text_length: 10000

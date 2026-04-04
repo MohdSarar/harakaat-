@@ -1,0 +1,165 @@
+# =============================================================================
+# Arabic Diacritization Pipeline — RTX 4090 GPU Configuration
+# =============================================================================
+#
+# Optimized for RTX 4090 (24 GB VRAM).
+# All quality-critical components PRESERVED:
+#   ✓ use_crf: true
+#   ✓ word_ending_head: true
+#   ✓ full model architecture (BiLSTM 3-layer bidirectional)
+#   ✓ same data pipeline
+#
+# Only throughput parameters changed:
+#   ↑ batch_size: 64 → 128
+#   ↑ num_workers: 4 → 8
+#   ✓ fp16: true (CRF runs in float32 internally — safe)
+#   ✓ gradient_clip: 5.0 (unchanged)
+#
+# Estimated: ~20–40 min/epoch on RTX 4090 with Tashkeela (~600K sentences)
+# =============================================================================
+
+project:
+  name: "arabic-diacritization-gpu"
+  seed: 42
+  device: "cuda"  # force CUDA — fail fast if no GPU
+
+# ---- Data (identical to default) ----
+data:
+  raw_dir: "data/raw"
+  normalized_dir: "data/normalized"
+  aligned_dir: "data/aligned"
+  splits_dir: "data/splits"
+  metadata_dir: "data/metadata"
+  lexicons_dir: "data/lexicons"
+
+  sources:
+    - name: "tashkeela"
+      type: "local"
+      path: "data/raw/msa/tashkeela"
+      variety: "msa"
+      format: "txt"
+    - name: "sadeed_tashkeela"
+      type: "huggingface"
+      repo: "Misraj/Sadeed_Tashkeela"
+      variety: "msa"
+    - name: "quran"
+      type: "local"
+      path: "data/raw/classical/quran"
+      variety: "classical"
+      format: "quran_morphology"
+
+  split_ratios:
+    train: 0.85
+    valid: 0.10
+    test: 0.05
+
+  max_sentence_length: 512  # full length preserved
+  min_sentence_length: 5
+
+# ---- Normalization (identical) ----
+normalization:
+  remove_tatweel: true
+  normalize_alif: true
+  normalize_hamza: true
+  normalize_taa_marbuta: false
+  normalize_punctuation: true
+  strip_extra_whitespace: true
+  preserve_rare_marks: false
+
+# ---- Linguistic (identical) ----
+linguistic:
+  enable: true
+  use_sinatools: false
+  features:
+    - "pos"
+    - "lemma"
+    - "morphology"
+  lexicon:
+    min_frequency: 3
+    max_entries: 500000
+
+# ---- Model (IDENTICAL architecture — no simplification) ----
+model:
+  architecture: "bilstm_crf"
+
+  char_embedding:
+    dim: 128        # same
+    dropout: 0.1    # same
+
+  encoder:
+    type: "bilstm"  # same
+    hidden_dim: 256  # same
+    num_layers: 3    # same
+    dropout: 0.3     # same
+    num_heads: 8
+    ff_dim: 1024
+
+  use_crf: true  # ✓ NON-NEGOTIABLE — preserved
+
+  word_ending_head:
+    enable: true         # ✓ NON-NEGOTIABLE — preserved
+    hidden_dim: 128      # same
+    context_window: 5    # same
+    loss_weight: 0.3     # same
+
+# ---- Training (GPU-optimized) ----
+training:
+  epochs: 50                     # same
+  batch_size: 128                # ↑ from 64 — RTX 4090 has 24GB VRAM
+  learning_rate: 0.001           # same
+  weight_decay: 0.0001           # same
+  scheduler: "cosine"            # same
+  warmup_steps: 1000             # same
+  gradient_clip: 5.0             # same — critical for CRF stability
+  early_stopping_patience: 7     # same
+  checkpoint_dir: "checkpoints"
+  log_dir: "logs"
+  num_workers: 8                 # ↑ from 4 — feed GPU faster
+
+  # Mixed precision — SAFE with our CRF (forced float32 internally)
+  fp16: true
+
+  augmentation:
+    enable: true
+    random_diac_drop: 0.1
+    word_shuffle_prob: 0.0
+
+# ---- Decoding (identical) ----
+decoding:
+  use_lexicon: true
+  lexicon_path: "data/lexicons/frequency_lexicon.json"
+  use_morphological_constraints: true
+  use_reranking: true
+  beam_size: 5
+  confidence_threshold: 0.85
+
+# ---- HITL (identical) ----
+hitl:
+  enable: true
+  database: "data/metadata/hitl.db"
+  confidence_threshold: 0.7
+  max_queue_size: 1000
+  export_format: "jsonl"
+
+# ---- Evaluation (identical) ----
+evaluation:
+  metrics:
+    - "der"
+    - "wer"
+    - "der_no_case"
+    - "der_case_only"
+  breakdown_by:
+    - "genre"
+    - "variety"
+    - "sentence_length"
+  oov_analysis: true
+
+# ---- API (identical) ----
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  max_text_length: 10000
+  enable_partial: true
+  enable_suggest: true
+  cors_origins: ["*"]

@@ -1,0 +1,156 @@
+# =============================================================================
+# Arabic Diacritization Pipeline — Default Configuration
+# =============================================================================
+
+project:
+  name: "arabic-diacritization"
+  seed: 42
+  device: "auto"  # auto, cpu, cuda, mps
+
+# ---- Layer 1: Data ----
+data:
+  raw_dir: "data/raw"
+  normalized_dir: "data/normalized"
+  aligned_dir: "data/aligned"
+  splits_dir: "data/splits"
+  metadata_dir: "data/metadata"
+  lexicons_dir: "data/lexicons"
+
+  sources:
+    - name: "tashkeela"
+      type: "local"
+      path: "data/raw/msa/tashkeela"
+      variety: "msa"
+      format: "txt"
+    - name: "sadeed_tashkeela"
+      type: "huggingface"
+      repo: "Misraj/Sadeed_Tashkeela"
+      variety: "msa"
+    - name: "quran"
+      type: "local"
+      path: "data/raw/classical/quran"
+      variety: "classical"
+      format: "quran_morphology"  # TSV morphology file from corpus.quran.com (Buckwalter encoded)
+
+  split_ratios:
+    train: 0.85
+    valid: 0.10
+    test: 0.05
+
+  max_sentence_length: 512
+  min_sentence_length: 5
+
+# ---- Layer 2: Normalization ----
+normalization:
+  remove_tatweel: true
+  normalize_alif: true       # أ إ آ → ا
+  normalize_hamza: true
+  normalize_taa_marbuta: false
+  normalize_punctuation: true
+  strip_extra_whitespace: true
+  preserve_rare_marks: false  # rare diacritics like superscript alef
+
+# ---- Layer 3: Linguistic Features ----
+linguistic:
+  enable: true
+  use_sinatools: false  # set to true if sinatools installed
+  features:
+    - "pos"
+    - "lemma"
+    - "morphology"
+  lexicon:
+    min_frequency: 3
+    max_entries: 500000
+
+# ---- Layer 4-5: Model ----
+model:
+  architecture: "bilstm_crf"  # bilstm_crf | transformer_crf | seq2seq
+  
+  char_embedding:
+    dim: 128
+    dropout: 0.1
+  
+  encoder:
+    type: "bilstm"  # bilstm | transformer
+    hidden_dim: 256
+    num_layers: 3
+    dropout: 0.3
+    # transformer-specific
+    num_heads: 8
+    ff_dim: 1024
+  
+  use_crf: true
+  
+  # Word-ending specialized head (Layer 5)
+  word_ending_head:
+    enable: true
+    hidden_dim: 128
+    context_window: 5  # chars before word boundary
+    loss_weight: 0.3   # relative to main loss
+
+  # Seq2Seq specific (if architecture == seq2seq)
+  seq2seq:
+    window_size: 256
+    overlap: 64
+    decoder_layers: 2
+
+training:
+  epochs: 50
+  batch_size: 64
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  scheduler: "cosine"  # cosine | step | plateau
+  warmup_steps: 1000
+  gradient_clip: 5.0
+  early_stopping_patience: 7
+  checkpoint_dir: "checkpoints"
+  log_dir: "logs"
+  
+  # Mixed precision
+  fp16: true
+  
+  # Data augmentation
+  augmentation:
+    enable: true
+    random_diac_drop: 0.1   # randomly drop diacritics from input
+    word_shuffle_prob: 0.0  # disabled by default
+
+# ---- Layer 6: Hybrid Decoding ----
+decoding:
+  use_lexicon: true
+  lexicon_path: "data/lexicons/frequency_lexicon.json"
+  use_morphological_constraints: true
+  use_reranking: true
+  beam_size: 5
+  confidence_threshold: 0.85  # below this → flag for HITL
+
+# ---- Layer 7: Human-in-the-Loop ----
+hitl:
+  enable: true
+  database: "data/metadata/hitl.db"
+  confidence_threshold: 0.7
+  max_queue_size: 1000
+  export_format: "jsonl"
+
+# ---- Layer 8: Evaluation ----
+evaluation:
+  metrics:
+    - "der"           # Diacritic Error Rate
+    - "wer"           # Word Error Rate
+    - "der_no_case"   # DER without case endings
+    - "der_case_only" # DER case endings only
+  breakdown_by:
+    - "genre"
+    - "variety"
+    - "sentence_length"
+  oov_analysis: true
+
+# ---- Layer 9: API ----
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  max_text_length: 10000
+  enable_partial: true
+  enable_suggest: true
+  cors_origins: ["*"]

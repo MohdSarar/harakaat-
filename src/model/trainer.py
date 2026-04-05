@@ -36,6 +36,7 @@ class Trainer:
         valid_loader: DataLoader,
         config: dict,
         device: torch.device,
+        resume_path: Optional[Path] = None,
     ):
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -109,9 +110,27 @@ class Trainer:
         self.best_val_loss = float("inf")
         self.patience_counter = 0
         self.history: list[dict] = []
+        self.start_epoch = 1
+
+        # ---- Resume from checkpoint ----
+        if resume_path is not None:
+            ckpt = torch.load(resume_path, map_location=device, weights_only=False)
+            model.load_state_dict(ckpt["model_state_dict"])
+            if "optimizer_state_dict" in ckpt:
+                self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            if "scaler_state_dict" in ckpt:
+                self.scaler.load_state_dict(ckpt["scaler_state_dict"])
+            self.start_epoch = ckpt.get("epoch", 0) + 1
+            self.best_val_loss = ckpt.get("val_loss", float("inf"))
+            # Fast-forward scheduler to match completed epochs
+            if not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                steps_done = (self.start_epoch - 1) * len(train_loader)
+                for _ in range(steps_done):
+                    self.scheduler.step()
+            print(f"Resumed from epoch {self.start_epoch - 1} (best val_loss={self.best_val_loss:.4f})")
 
     def train(self) -> dict:
-        for epoch in range(1, self.epochs + 1):
+        for epoch in range(self.start_epoch, self.epochs + 1):
             t0 = time.time()
 
             train_loss = self._train_epoch(epoch)

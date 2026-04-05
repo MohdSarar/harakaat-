@@ -127,13 +127,11 @@ def main():
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model params: {total_params:,} total, {trainable_params:,} trainable")
 
-    # Resume
-    if args.resume:
-        print(f"Resuming from {args.resume}")
-        Trainer.load_checkpoint(args.resume, model, device)
-
-    # Train
-    trainer = Trainer(model, train_loader, valid_loader, config_dict, device)
+    # Train (resume handled inside Trainer if --resume provided)
+    trainer = Trainer(
+        model, train_loader, valid_loader, config_dict, device,
+        resume_path=Path(args.resume) if args.resume else None,
+    )
     result = trainer.train()
 
     print(f"\nTraining complete. Best val loss: {result['best_val_loss']:.4f}")

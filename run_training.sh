@@ -1,6 +1,9 @@
 #!/bin/bash
 cd /workspace/harakaat-
 
+# Install dependencies if needed
+pip install -e "." -q >> logs/install.log 2>&1
+
 PYTHONPATH=. python scripts/train.py --config configs/gpu_rtx4090.yaml --resume checkpoints/best.pt > logs/train.log 2>&1
 EXIT_CODE=$?
 

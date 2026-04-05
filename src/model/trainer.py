@@ -27,6 +27,26 @@ from src.model.diacritizer import DiacritizationModel
 from src.evaluation.metrics import compute_der, compute_wer
 
 
+def _model_inputs(batch: dict) -> dict:
+    """Extract encoder inputs from a batch — handles both BiLSTM and AraBERT modes."""
+    common = {
+        "attention_mask": batch["attention_mask"],
+        "word_end_mask": batch.get("word_end_mask"),
+    }
+    if "bert_input_ids" in batch:
+        return {
+            **common,
+            "bert_input_ids": batch["bert_input_ids"],
+            "bert_attention_mask": batch["bert_attention_mask"],
+            "char_to_token_map": batch["char_to_token_map"],
+        }
+    return {
+        **common,
+        "input_ids": batch["input_ids"],
+        "lengths": batch.get("lengths"),
+    }
+
+
 class Trainer:
 
     def __init__(
@@ -200,11 +220,8 @@ class Trainer:
 
             with torch.amp.autocast("cuda", enabled=self.use_fp16):
                 output = self.model(
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
+                    **_model_inputs(batch),
                     labels=batch["labels"],
-                    word_end_mask=batch.get("word_end_mask"),
-                    lengths=batch.get("lengths"),
                 )
                 loss = output["loss"]
 
@@ -236,11 +253,8 @@ class Trainer:
 
             with torch.amp.autocast("cuda", enabled=self.use_fp16):
                 output = self.model(
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
+                    **_model_inputs(batch),
                     labels=batch["labels"],
-                    word_end_mask=batch.get("word_end_mask"),
-                    lengths=batch.get("lengths"),
                 )
 
             total_loss += output["loss"].item()

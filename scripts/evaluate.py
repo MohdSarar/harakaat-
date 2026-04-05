@@ -44,38 +44,65 @@ def main():
     dc = config_dict.get("data", {})
     vocab = CharVocab.load(Path(dc.get("lexicons_dir", "data/lexicons")) / "char_vocab.json")
 
-    # Load test data
-    test_path = Path(dc.get("splits_dir", "data/splits")) / args.split / "data.jsonl"
-    test_dataset = DiacritizationDataset(test_path, vocab)
-    test_loader = DataLoader(
-        test_dataset, batch_size=128, shuffle=False, collate_fn=collate_fn, num_workers=4
-    )
-    print(f"Test samples: {len(test_dataset)}")
-
-    # Load checkpoint first to infer vocab size actually used during training
-    checkpoint = torch.load(args.checkpoint, map_location=device)
-    ckpt_vocab_size = checkpoint["model_state_dict"]["char_embed.embedding.weight"].shape[0]
-    if ckpt_vocab_size != len(vocab):
-        print(f"Warning: checkpoint vocab size ({ckpt_vocab_size}) differs from current vocab ({len(vocab)}). Using checkpoint size.")
-
     mc = config_dict.get("model", {})
     enc = mc.get("encoder", {})
     emb = mc.get("char_embedding", {})
     weh = mc.get("word_ending_head", {})
 
+    # Load checkpoint first to infer vocab size and encoder type used during training
+    checkpoint = torch.load(args.checkpoint, map_location=device)
+    state_dict = checkpoint["model_state_dict"]
+    encoder_type = enc.get("type", "bilstm")
+
+    # Detect encoder type from checkpoint keys (overrides config)
+    if any(k.startswith("encoder.bert.") for k in state_dict):
+        encoder_type = "arabert"
+
+    # Vocab size (only relevant for non-arabert)
+    ckpt_vocab_size = len(vocab)
+    if encoder_type != "arabert":
+        if "char_embed.embedding.weight" in state_dict:
+            ckpt_vocab_size = state_dict["char_embed.embedding.weight"].shape[0]
+            if ckpt_vocab_size != len(vocab):
+                print(f"Warning: checkpoint vocab size ({ckpt_vocab_size}) differs from current vocab ({len(vocab)}). Using checkpoint size.")
+
+    # AraBERT tokenizer (only for arabert encoder)
+    tokenizer = None
+    if encoder_type == "arabert":
+        from transformers import AutoTokenizer
+        arabert_name = enc.get("model_name", "aubmindlab/bert-base-arabertv02")
+        print(f"Loading AraBERT tokenizer: {arabert_name}")
+        tokenizer = AutoTokenizer.from_pretrained(arabert_name)
+
+    # Load test data
+    test_path = Path(dc.get("splits_dir", "data/splits")) / args.split / "data.jsonl"
+    test_dataset = DiacritizationDataset(
+        test_path, vocab,
+        tokenizer=tokenizer,
+        max_bert_length=enc.get("max_bert_length", 512),
+    )
+    eval_batch_size = 32 if encoder_type == "arabert" else 128
+    test_loader = DataLoader(
+        test_dataset, batch_size=eval_batch_size, shuffle=False,
+        collate_fn=collate_fn, num_workers=4,
+    )
+    print(f"Test samples: {len(test_dataset)}")
+
     model = DiacritizationModel(
         vocab_size=ckpt_vocab_size,
         embed_dim=emb.get("dim", 128),
-        encoder_type=enc.get("type", "bilstm"),
+        encoder_type=encoder_type,
         hidden_dim=enc.get("hidden_dim", 256),
         num_layers=enc.get("num_layers", 3),
         use_crf=mc.get("use_crf", True),
         use_word_ending_head=weh.get("enable", True),
+        arabert_model_name=enc.get("model_name", "aubmindlab/bert-base-arabertv02"),
+        arabert_freeze_layers=enc.get("freeze_layers", 0),
     )
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
-    print(f"Model loaded from {args.checkpoint}")
+    print(f"Model loaded from {args.checkpoint} (encoder: {encoder_type})")
 
     # Load lexicon + decoder
     lex_path = Path(dc.get("lexicons_dir", "data/lexicons")) / "frequency_lexicon.json"
@@ -109,22 +136,34 @@ def main():
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Evaluating"):
             batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
-            # Clamp indices that exceed training vocab size to UNK
-            if "input_ids" in batch:
-                ids = batch["input_ids"]
-                out_of_range = ids >= ckpt_vocab_size
-                if out_of_range.any():
-                    ids = ids.clone()
-                    ids[out_of_range] = min(unk_idx, ckpt_vocab_size - 1)
-                    batch["input_ids"] = ids
-            output = model(
-                input_ids=batch["input_ids"],
-                attention_mask=batch["attention_mask"],
-                word_end_mask=batch.get("word_end_mask"),
-                lengths=batch.get("lengths"),
-            )
-            
-            for i in range(batch["input_ids"].size(0)):
+
+            if encoder_type == "arabert":
+                output = model(
+                    bert_input_ids=batch["bert_input_ids"],
+                    bert_attention_mask=batch["bert_attention_mask"],
+                    char_to_token_map=batch["char_to_token_map"],
+                    attention_mask=batch["attention_mask"],
+                    word_end_mask=batch.get("word_end_mask"),
+                )
+                batch_size_dim = batch["bert_input_ids"].size(0)
+            else:
+                # Clamp indices that exceed training vocab size to UNK
+                if "input_ids" in batch:
+                    ids = batch["input_ids"]
+                    out_of_range = ids >= ckpt_vocab_size
+                    if out_of_range.any():
+                        ids = ids.clone()
+                        ids[out_of_range] = min(unk_idx, ckpt_vocab_size - 1)
+                        batch["input_ids"] = ids
+                output = model(
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    word_end_mask=batch.get("word_end_mask"),
+                    lengths=batch.get("lengths"),
+                )
+                batch_size_dim = batch["input_ids"].size(0)
+
+            for i in range(batch_size_dim):
                 if idx >= len(raw_records):
                     break
                 

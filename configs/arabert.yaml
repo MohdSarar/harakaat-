@@ -1,0 +1,165 @@
+# =============================================================================
+# Arabic Diacritization Pipeline — AraBERT Fine-tuning Configuration
+# =============================================================================
+#
+# Uses aubmindlab/bert-base-arabertv02 as the encoder (pre-trained on 77GB MSA).
+# This replaces the BiLSTM encoder entirely — the rest of the pipeline is unchanged
+# (CRF decoder, WordEndingHead, HybridDecoder, HITL, FastAPI).
+#
+# Key differences vs gpu_rtx4090.yaml:
+#   - encoder.type: "arabert"
+#   - learning_rate: 2e-5  (BERT fine-tuning LR — much lower than BiLSTM)
+#   - batch_size: 32        (BERT is heavier; 32 fits on RTX 4090 24GB)
+#   - epochs: 15            (BERT converges faster — overfitting risk after ~10)
+#   - warmup_steps: 500     (standard for BERT fine-tuning)
+#   - fp16: true            (safe — CRF still uses float32 internally)
+# =============================================================================
+
+project:
+  name: "arabic-diacritization-arabert"
+  seed: 42
+  device: "cuda"
+
+# ---- Data (identical to default) ----
+data:
+  raw_dir: "data/raw"
+  normalized_dir: "data/normalized"
+  aligned_dir: "data/aligned"
+  splits_dir: "data/splits"
+  metadata_dir: "data/metadata"
+  lexicons_dir: "data/lexicons"
+
+  sources:
+    - name: "tashkeela"
+      type: "local"
+      path: "data/raw/msa/tashkeela"
+      variety: "msa"
+      format: "txt"
+    - name: "sadeed_tashkeela"
+      type: "huggingface"
+      repo: "Misraj/Sadeed_Tashkeela"
+      variety: "msa"
+    - name: "quran"
+      type: "local"
+      path: "data/raw/classical/quran"
+      variety: "classical"
+      format: "quran_morphology"
+
+  split_ratios:
+    train: 0.85
+    valid: 0.10
+    test: 0.05
+
+  max_sentence_length: 512
+  min_sentence_length: 5
+
+  excluded_genres:
+    - "al-kalema.org"
+    - "enfal.de"
+
+# ---- Normalization (identical) ----
+normalization:
+  remove_tatweel: true
+  normalize_alif: true
+  normalize_hamza: true
+  normalize_taa_marbuta: false
+  normalize_punctuation: true
+  strip_extra_whitespace: true
+  preserve_rare_marks: false
+
+# ---- Linguistic (identical) ----
+linguistic:
+  enable: true
+  use_sinatools: false
+  features:
+    - "pos"
+    - "lemma"
+    - "morphology"
+  lexicon:
+    min_frequency: 3
+    max_entries: 500000
+
+# ---- Model ----
+model:
+  architecture: "arabert_crf"
+
+  char_embedding:
+    dim: 128      # not used by arabert encoder, kept for compatibility
+    dropout: 0.1
+
+  encoder:
+    type: "arabert"
+    model_name: "aubmindlab/bert-base-arabertv02"
+    freeze_layers: 0          # fine-tune all layers
+    dropout: 0.1
+    max_bert_length: 512      # BERT max subword sequence length
+
+  use_crf: true
+
+  word_ending_head:
+    enable: true
+    hidden_dim: 256           # larger head to match 768-dim BERT representations
+    context_window: 5
+    loss_weight: 1.0
+
+# ---- Training ----
+training:
+  epochs: 15
+  batch_size: 32              # fits on RTX 4090 with BERT + CRF + fp16
+  learning_rate: 0.00002      # 2e-5 — standard BERT fine-tuning LR
+  weight_decay: 0.01          # standard for BERT (AdamW default)
+  scheduler: "cosine"
+  warmup_steps: 500
+  gradient_clip: 1.0          # lower clip for BERT stability
+  early_stopping_patience: 5  # BERT converges fast — stop early if no improvement
+  checkpoint_dir: "checkpoints"
+  log_dir: "logs"
+  num_workers: 4
+
+  fp16: true
+
+  augmentation:
+    enable: false             # disabled for BERT fine-tuning (less beneficial)
+    random_diac_drop: 0.0
+    word_shuffle_prob: 0.0
+
+# ---- Decoding (identical) ----
+decoding:
+  use_lexicon: true
+  lexicon_path: "data/lexicons/frequency_lexicon.json"
+  use_morphological_constraints: true
+  use_reranking: true
+  beam_size: 5
+  confidence_threshold: 0.85
+  word_ending_override_threshold: 0.40
+
+# ---- HITL (identical) ----
+hitl:
+  enable: true
+  database: "data/metadata/hitl.db"
+  confidence_threshold: 0.7
+  max_queue_size: 1000
+  export_format: "jsonl"
+
+# ---- Evaluation (identical) ----
+evaluation:
+  metrics:
+    - "der"
+    - "wer"
+    - "der_no_case"
+    - "der_case_only"
+  breakdown_by:
+    - "genre"
+    - "variety"
+    - "sentence_length"
+  oov_analysis: true
+
+# ---- API (identical) ----
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  max_text_length: 10000
+  enable_partial: true
+  enable_suggest: true
+  cors_origins: ["*"]

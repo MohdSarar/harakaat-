@@ -65,20 +65,35 @@ def main():
     if excluded_genres:
         print(f"Excluding genres from training: {excluded_genres}")
 
-    train_dataset = DiacritizationDataset(
-        splits_dir / "train" / "data.jsonl", vocab,
-        max_length=max_len, excluded_genres=excluded_genres,
+    mc = config_dict.get("model", {})
+    enc = mc.get("encoder", {})
+    emb = mc.get("char_embedding", {})
+    weh = mc.get("word_ending_head", {})
+    encoder_type = enc.get("type", "bilstm")
+
+    # AraBERT tokenizer (only for arabert encoder)
+    tokenizer = None
+    if encoder_type == "arabert":
+        from transformers import AutoTokenizer
+        arabert_name = enc.get("model_name", "aubmindlab/bert-base-arabertv02")
+        print(f"Loading AraBERT tokenizer: {arabert_name}")
+        tokenizer = AutoTokenizer.from_pretrained(arabert_name)
+
+    dataset_kwargs = dict(
+        max_length=max_len,
+        excluded_genres=excluded_genres,
+        tokenizer=tokenizer,
+        max_bert_length=enc.get("max_bert_length", 512),
     )
-    valid_dataset = DiacritizationDataset(
-        splits_dir / "valid" / "data.jsonl", vocab,
-        max_length=max_len, excluded_genres=excluded_genres,
-    )
-    print(f"Train: {len(train_dataset)} | Valid: {len(valid_dataset)}")
+    train_dataset = DiacritizationDataset(splits_dir / "train" / "data.jsonl", vocab, **dataset_kwargs)
+    valid_dataset = DiacritizationDataset(splits_dir / "valid" / "data.jsonl", vocab, **dataset_kwargs)
+    mode_label = "AraBERT" if tokenizer else "BiLSTM"
+    print(f"Train: {len(train_dataset)} | Valid: {len(valid_dataset)} ({mode_label} mode)")
 
     tc = config_dict.get("training", {})
     num_workers = tc.get("num_workers", 4)
     use_cuda = device.type == "cuda"
-    
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=tc.get("batch_size", 64),
@@ -100,20 +115,14 @@ def main():
         prefetch_factor=2 if num_workers > 0 else None,
     )
 
-    # Model
-    mc = config_dict.get("model", {})
-    enc = mc.get("encoder", {})
-    emb = mc.get("char_embedding", {})
-    weh = mc.get("word_ending_head", {})
-
     model = DiacritizationModel(
         vocab_size=len(vocab),
         embed_dim=emb.get("dim", 128),
         embed_dropout=emb.get("dropout", 0.1),
-        encoder_type=enc.get("type", "bilstm"),
+        encoder_type=encoder_type,
         hidden_dim=enc.get("hidden_dim", 256),
         num_layers=enc.get("num_layers", 3),
-        encoder_dropout=enc.get("dropout", 0.3),
+        encoder_dropout=enc.get("dropout", 0.1),
         num_heads=enc.get("num_heads", 8),
         ff_dim=enc.get("ff_dim", 1024),
         use_crf=mc.get("use_crf", True),
@@ -121,6 +130,8 @@ def main():
         we_hidden_dim=weh.get("hidden_dim", 128),
         we_context_window=weh.get("context_window", 5),
         we_loss_weight=weh.get("loss_weight", 0.3),
+        arabert_model_name=enc.get("model_name", "aubmindlab/bert-base-arabertv02"),
+        arabert_freeze_layers=enc.get("freeze_layers", 0),
     )
 
     total_params = sum(p.numel() for p in model.parameters())

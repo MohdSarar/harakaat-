@@ -80,6 +80,57 @@ class TransformerEncoder(nn.Module):
         return self.encoder(x, src_key_padding_mask=src_key_padding_mask)
 
 
+class ArabertEncoder(nn.Module):
+    """
+    AraBERT contextual encoder — replaces BiLSTM for large quality jump.
+    Uses aubmindlab/bert-base-arabertv02 pre-trained on 77GB Arabic text.
+    Expands subword-level BERT representations back to character level.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "aubmindlab/bert-base-arabertv02",
+        dropout: float = 0.1,
+        freeze_layers: int = 0,
+    ):
+        super().__init__()
+        from transformers import AutoModel
+        self.bert = AutoModel.from_pretrained(model_name)
+        self.dropout = nn.Dropout(dropout)
+        self.output_dim = self.bert.config.hidden_size  # 768 for bert-base
+
+        if freeze_layers > 0:
+            for param in self.bert.embeddings.parameters():
+                param.requires_grad = False
+            for layer in self.bert.encoder.layer[:freeze_layers]:
+                for param in layer.parameters():
+                    param.requires_grad = False
+
+    def forward(
+        self,
+        bert_input_ids: torch.Tensor,
+        bert_attention_mask: torch.Tensor,
+        char_to_token_map: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        bert_input_ids:     (batch, bert_seq_len)
+        bert_attention_mask:(batch, bert_seq_len)
+        char_to_token_map:  (batch, char_seq_len) — BERT token index for each char
+
+        Returns: (batch, char_seq_len, hidden_size=768)
+        """
+        outputs = self.bert(
+            input_ids=bert_input_ids,
+            attention_mask=bert_attention_mask,
+        )
+        hidden = self.dropout(outputs.last_hidden_state)  # (batch, bert_seq_len, 768)
+
+        # Expand BERT token representations to character level
+        idx = char_to_token_map.unsqueeze(-1).expand(-1, -1, hidden.size(-1))
+        char_hidden = torch.gather(hidden, 1, idx)  # (batch, char_seq_len, 768)
+        return char_hidden
+
+
 class WordEndingHead(nn.Module):
     """
     Specialized prediction head for word-final diacritics (Layer 5).
@@ -143,7 +194,7 @@ class DiacritizationModel(nn.Module):
         vocab_size: int,
         embed_dim: int = 128,
         embed_dropout: float = 0.1,
-        encoder_type: str = "bilstm",  # "bilstm" or "transformer"
+        encoder_type: str = "bilstm",  # "bilstm", "transformer", or "arabert"
         hidden_dim: int = 256,
         num_layers: int = 3,
         encoder_dropout: float = 0.3,
@@ -156,24 +207,31 @@ class DiacritizationModel(nn.Module):
         we_hidden_dim: int = 128,
         we_context_window: int = 5,
         we_loss_weight: float = 0.3,
+        # AraBERT-specific
+        arabert_model_name: str = "aubmindlab/bert-base-arabertv02",
+        arabert_freeze_layers: int = 0,
     ):
         super().__init__()
-        
+
+        self.encoder_type = encoder_type
         self.use_crf = use_crf
         self.use_word_ending_head = use_word_ending_head
         self.we_loss_weight = we_loss_weight
-        
-        # Character embedding
-        self.char_embed = CharEmbedding(vocab_size, embed_dim, embed_dropout)
-        
+
+        # Character embedding (not used for AraBERT)
+        if encoder_type != "arabert":
+            self.char_embed = CharEmbedding(vocab_size, embed_dim, embed_dropout)
+
         # Encoder
         if encoder_type == "bilstm":
             self.encoder = BiLSTMEncoder(embed_dim, hidden_dim, num_layers, encoder_dropout)
         elif encoder_type == "transformer":
             self.encoder = TransformerEncoder(embed_dim, hidden_dim, num_layers, num_heads, ff_dim, encoder_dropout)
+        elif encoder_type == "arabert":
+            self.encoder = ArabertEncoder(arabert_model_name, encoder_dropout, arabert_freeze_layers)
         else:
             raise ValueError(f"Unknown encoder type: {encoder_type}")
-        
+
         enc_output_dim = self.encoder.output_dim
         
         # Main classification head
@@ -191,28 +249,31 @@ class DiacritizationModel(nn.Module):
 
     def forward(
         self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         word_end_mask: Optional[torch.Tensor] = None,
         lengths: Optional[torch.Tensor] = None,
+        # AraBERT inputs
+        bert_input_ids: Optional[torch.Tensor] = None,
+        bert_attention_mask: Optional[torch.Tensor] = None,
+        char_to_token_map: Optional[torch.Tensor] = None,
     ) -> dict[str, torch.Tensor]:
         """
-        Forward pass.
-        
-        Returns dict with:
-            - loss (if labels provided)
-            - emissions (logits)
-            - predictions (decoded tags)
-            - word_ending_logits (if head enabled)
+        Forward pass — supports BiLSTM and AraBERT encoders.
+
+        BiLSTM mode:  input_ids + attention_mask + lengths
+        AraBERT mode: bert_input_ids + bert_attention_mask + char_to_token_map
+                      + attention_mask (char-level, for CRF)
         """
-        # Embed
-        embedded = self.char_embed(input_ids)
-        
         # Encode
-        if isinstance(self.encoder, BiLSTMEncoder):
+        if self.encoder_type == "arabert":
+            hidden = self.encoder(bert_input_ids, bert_attention_mask, char_to_token_map)
+        elif isinstance(self.encoder, BiLSTMEncoder):
+            embedded = self.char_embed(input_ids)
             hidden = self.encoder(embedded, lengths)
         else:
+            embedded = self.char_embed(input_ids)
             hidden = self.encoder(embedded, attention_mask)
         
         # Main emissions

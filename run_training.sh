@@ -20,7 +20,7 @@ print('Checkpoint downloaded.')
 " 2>&1 | tee -a logs/train.log
 fi
 
-PYTHONPATH=. python scripts/train.py --config configs/gpu_rtx4090.yaml --resume checkpoints/best.pt >> logs/train.log 2>&1
+PYTHONPATH=. python scripts/train.py --config configs/arabert.yaml --resume checkpoints/best.pt >> logs/train.log 2>&1
 EXIT_CODE=$?
 
 echo "Training finished with exit code $EXIT_CODE at $(date)" | tee -a logs/train.log

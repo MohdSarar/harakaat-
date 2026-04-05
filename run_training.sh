@@ -50,11 +50,13 @@ print('Upload done.')
 fi
 
 # Only upload and terminate if training succeeded
-if [ "$EXIT_CODE" -eq 0 ] && [ -n "$RUNPOD_API_KEY" ] && [ -n "$POD_ID" ]; then
-    echo "Terminating pod $POD_ID..." | tee -a logs/train.log
+if [ "$EXIT_CODE" -eq 0 ] && [ -n "$RUNPOD_API_KEY" ]; then
+    # Get real pod ID from hostname if POD_ID not set or wrong
+    REAL_POD_ID="${POD_ID:-$(hostname)}"
+    echo "Terminating pod $REAL_POD_ID..." | tee -a logs/train.log
     curl -s -X POST "https://api.runpod.io/graphql?api_key=$RUNPOD_API_KEY" \
         -H "Content-Type: application/json" \
-        -d "{\"query\": \"mutation { podTerminate(input: {podId: \\\"$POD_ID\\\"}) }\"}" \
+        -d "{\"query\": \"mutation { podTerminate(input: {podId: \\\"$REAL_POD_ID\\\"}) }\"}" \
         >> logs/train.log 2>&1
 else
     echo "Training failed (exit $EXIT_CODE) — pod NOT terminated. Check logs/train.log" | tee -a logs/train.log
